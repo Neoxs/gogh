@@ -92,7 +92,11 @@ func (ar *ActionResolver) ResolveAction(actionRef string, inputs map[string]stri
 
 // registerBuiltinActions registers all internal action implementations
 func (ar *ActionResolver) registerBuiltinActions() {
-	// Add built-in actions as needed
+	// Checkout action
+	checkout := &CheckoutAction{}
+	ar.builtinActions["actions/checkout"] = checkout
+
+	// Add more built-in actions as needed
 }
 
 func (ar *ActionResolver) normalizeActionRef(actionRef string) string {
