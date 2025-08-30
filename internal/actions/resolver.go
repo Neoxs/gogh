@@ -96,6 +96,10 @@ func (ar *ActionResolver) registerBuiltinActions() {
 	checkout := &CheckoutAction{}
 	ar.builtinActions["actions/checkout"] = checkout
 
+	// Node.js setup action
+	setupNode := &SetupNodeAction{}
+	ar.builtinActions["actions/setup-node"] = setupNode
+
 	// Add more built-in actions as needed
 }
 
