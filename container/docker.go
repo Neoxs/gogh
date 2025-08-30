@@ -7,7 +7,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+
+	"github.com/Neoxs/gogh/internal/logging"
 )
 
 // JobRunner manages a Docker container for running GitHub Actions jobs
@@ -25,7 +28,7 @@ func NewJobRunner(runsOn, projectDir string) *JobRunner {
 	absProjectDir, _ := filepath.Abs(projectDir)
 
 	return &JobRunner{
-		image:        mapRunnerToImage(runsOn), // Simple mapping for common cases
+		image:        mapRunnerToImage(runsOn),
 		projectDir:   absProjectDir,
 		workspaceDir: "/workspace", // Standard workspace inside container
 		isRunning:    false,
@@ -46,19 +49,23 @@ func mapRunnerToImage(runsOn string) string {
 	}
 }
 
+// GetImage returns the Docker image being used
+func (jr *JobRunner) GetImage() string {
+	return jr.image
+}
+
+// GetContainerID returns the current container ID
+func (jr *JobRunner) GetContainerID() string {
+	return jr.containerID
+}
+
 // Start creates and starts the Docker container
 func (jr *JobRunner) Start() error {
 	if jr.isRunning {
 		return fmt.Errorf("container already running")
 	}
 
-	fmt.Printf("🐳 Starting container with image: %s\n", jr.image)
-
 	// Docker run command with volume mounting
-	// -v mounts local project directory into container at /workspace
-	// -w sets working directory inside container
-	// -d runs in detached mode so container stays alive
-	// --rm automatically removes container when it stops
 	args := []string{
 		"run",
 		"-d",                                                       // detached mode
@@ -78,17 +85,14 @@ func (jr *JobRunner) Start() error {
 	jr.containerID = strings.TrimSpace(string(output))
 	jr.isRunning = true
 
-	fmt.Printf("✅ Container started: %s\n", jr.containerID[:12]) // show short ID
 	return nil
 }
 
-// RunStep executes a single step command inside the container
-func (jr *JobRunner) RunStep(stepName, command string) (*StepResult, error) {
+// RunStep executes a single step command inside the container with logging
+func (jr *JobRunner) RunStep(stepName, command string, jobLogger *logging.JobLogger) (*StepResult, error) {
 	if !jr.isRunning {
 		return nil, fmt.Errorf("container not running")
 	}
-
-	fmt.Printf("🔄 Running step: %s\n", stepName)
 
 	result := &StepResult{
 		StepName:  stepName,
@@ -97,8 +101,6 @@ func (jr *JobRunner) RunStep(stepName, command string) (*StepResult, error) {
 	}
 
 	// Use docker exec to run command in the existing container
-	// -i for interactive (allows input)
-	// bash -c to properly handle shell commands with pipes, etc.
 	args := []string{
 		"exec",
 		jr.containerID,
@@ -126,37 +128,44 @@ func (jr *JobRunner) RunStep(stepName, command string) (*StepResult, error) {
 		return result, err
 	}
 
-	// Stream output as it comes
-	go jr.streamOutput(stdout, "STDOUT", &result.Output)
-	go jr.streamOutput(stderr, "STDERR", &result.Output)
+	// Stream output directly to logger
+	go jr.streamOutputToLogger(stdout, jobLogger)
+	go jr.streamOutputToLogger(stderr, jobLogger)
 
 	// Wait for command to complete
 	err = cmd.Wait()
 	result.EndTime = time.Now()
 	result.Duration = result.EndTime.Sub(result.StartTime)
 
+	// Get exit code
+	result.ExitCode = 0
 	if err != nil {
+		if exitError, ok := err.(*exec.ExitError); ok {
+			if status, ok := exitError.Sys().(syscall.WaitStatus); ok {
+				result.ExitCode = status.ExitStatus()
+			} else {
+				result.ExitCode = 1
+			}
+		} else {
+			result.ExitCode = 1
+		}
 		result.Error = err
 		result.Success = false
-		fmt.Printf("❌ Step failed: %s (%.2fs)\n", stepName, result.Duration.Seconds())
 	} else {
 		result.Success = true
-		fmt.Printf("✅ Step completed: %s (%.2fs)\n", stepName, result.Duration.Seconds())
 	}
 
 	return result, nil
 }
 
-// streamOutput reads from pipe and collects output
-func (jr *JobRunner) streamOutput(pipe io.ReadCloser, prefix string, output *[]string) {
+// streamOutputToLogger reads from pipe and writes directly to job logger
+func (jr *JobRunner) streamOutputToLogger(pipe io.ReadCloser, jobLogger *logging.JobLogger) {
 	defer pipe.Close()
 
 	scanner := bufio.NewScanner(pipe)
 	for scanner.Scan() {
 		line := scanner.Text()
-		*output = append(*output, fmt.Sprintf("[%s] %s", prefix, line))
-		// Also print to terminal for real-time feedback
-		fmt.Printf("    %s\n", line)
+		jobLogger.LogStepOutput(line)
 	}
 }
 
@@ -165,8 +174,6 @@ func (jr *JobRunner) Stop() error {
 	if !jr.isRunning || jr.containerID == "" {
 		return nil
 	}
-
-	fmt.Printf("🛑 Stopping container: %s\n", jr.containerID[:12])
 
 	cmd := exec.Command("docker", "stop", jr.containerID)
 	if err := cmd.Run(); err != nil {
@@ -185,21 +192,7 @@ type StepResult struct {
 	StartTime time.Time
 	EndTime   time.Time
 	Duration  time.Duration
-	Output    []string
 	Success   bool
+	ExitCode  int
 	Error     error
-}
-
-// GetOutputLines returns just the actual command output (without prefixes)
-func (sr *StepResult) GetOutputLines() []string {
-	var lines []string
-	for _, line := range sr.Output {
-		// Remove the [STDOUT] or [STDERR] prefix
-		if strings.HasPrefix(line, "[STDOUT] ") {
-			lines = append(lines, line[9:])
-		} else if strings.HasPrefix(line, "[STDERR] ") {
-			lines = append(lines, line[9:])
-		}
-	}
-	return lines
 }

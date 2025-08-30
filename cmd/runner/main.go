@@ -35,19 +35,6 @@ func main() {
 }
 
 func runWorkflow(workflowFile string) error {
-	fmt.Println(`
-    __/\\\\\\\\\\\\_______/\\\\\__________/\\\\\\\\\\\\__/\\\________/\\\_        
- ___/\\\//////////______/\\\///\\\______/\\\//////////__\/\\\_______\/\\\_       
-  __/\\\_______________/\\\/__\///\\\___/\\\_____________\/\\\_______\/\\\_      
-   _\/\\\____/\\\\\\\__/\\\______\//\\\_\/\\\____/\\\\\\\_\/\\\\\\\\\\\\\\\_     
-    _\/\\\___\/////\\\_\/\\\_______\/\\\_\/\\\___\/////\\\_\/\\\/////////\\\_    
-     _\/\\\_______\/\\\_\//\\\______/\\\__\/\\\_______\/\\\_\/\\\_______\/\\\_   
-      _\/\\\_______\/\\\__\///\\\__/\\\____\/\\\_______\/\\\_\/\\\_______\/\\\_  
-       _\//\\\\\\\\\\\\/_____\///\\\\\/_____\//\\\\\\\\\\\\/__\/\\\_______\/\\\_ 
-        __\////////////_________\/////________\////////////____\///________\///__
-                                                                                  `)
-	fmt.Printf("🚀 Starting workflow: %s\n", workflowFile)
-
 	// Parse the workflow
 	parser := workflow.NewParser()
 	workflowDef, err := parser.ParseFile(workflowFile)
@@ -61,7 +48,12 @@ func runWorkflow(workflowFile string) error {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	// Create and execute workflow
-	executor := executor.NewWorkflowExecutor(workflowDef, projectDir)
-	return executor.Execute()
+	// Create executor with logging and display (now returns error)
+	workflowExecutor, err := executor.NewWorkflowExecutor(workflowDef, projectDir)
+	if err != nil {
+		return fmt.Errorf("failed to create workflow executor: %w", err)
+	}
+
+	// Execute workflow - this will handle all display and logging
+	return workflowExecutor.Execute()
 }

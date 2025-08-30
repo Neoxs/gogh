@@ -1,3 +1,4 @@
+// internal/logging/logger.go
 package logging
 
 import (
@@ -180,6 +181,16 @@ func (jl *JobLogger) LogJobError(jobID string, err error) {
 func (wl *WorkflowLogger) logWorkflowHeader(workflowName string) {
 	header := fmt.Sprintf(`
 ==============================================
+_____/\\\\\\\\\\\\_______/\\\\\__________/\\\\\\\\\\\\__/\\\________/\\\_        
+ ___/\\\//////////______/\\\///\\\______/\\\//////////__\/\\\_______\/\\\_       
+  __/\\\_______________/\\\/__\///\\\___/\\\_____________\/\\\_______\/\\\_      
+   _\/\\\____/\\\\\\\__/\\\______\//\\\_\/\\\____/\\\\\\\_\/\\\\\\\\\\\\\\\_     
+    _\/\\\___\/////\\\_\/\\\_______\/\\\_\/\\\___\/////\\\_\/\\\/////////\\\_    
+     _\/\\\_______\/\\\_\//\\\______/\\\__\/\\\_______\/\\\_\/\\\_______\/\\\_   
+      _\/\\\_______\/\\\__\///\\\__/\\\____\/\\\_______\/\\\_\/\\\_______\/\\\_  
+       _\//\\\\\\\\\\\\/_____\///\\\\\/_____\//\\\\\\\\\\\\/__\/\\\_______\/\\\_ 
+        __\////////////_________\/////________\////////////____\///________\///__
+
 GoGH - GitHub Actions Local Runner
 ==============================================
 Workflow: %s
@@ -236,11 +247,11 @@ func (wl *WorkflowLogger) Close() error {
 
 // Close closes the job logger
 func (jl *JobLogger) Close() error {
-	jl.mu.Lock()
-	defer jl.mu.Unlock()
-
 	if jl.jobFile != nil {
-		jl.writeJobLog(fmt.Sprintf("=== Job '%s' logging completed ===", jl.jobID))
+		// Write final message without mutex (since we're closing)
+		timestamp := time.Now().UTC().Format("2006-01-02T15:04:05.0000000Z")
+		line := fmt.Sprintf("%s === Job '%s' logging completed ===\n", timestamp, jl.jobID)
+		jl.jobFile.WriteString(line)
 		return jl.jobFile.Close()
 	}
 
