@@ -38,12 +38,24 @@ func (sna *SetupNodeAction) Execute(ctx *ActionContext, jobLogger *logging.JobLo
 		Outputs: make(map[string]string),
 	}
 
-	// Install Node.js using NodeSource repository (similar to GitHub Actions)
+	// First, update package lists and install prerequisites
+	prerequisiteCommands := []string{
+		"apt-get update",
+		"apt-get install -y curl ca-certificates gnupg",
+	}
+
+	for _, cmd := range prerequisiteCommands {
+		jobLogger.LogStepOutput(fmt.Sprintf("Installing prerequisites: %s", cmd))
+		if err := sna.runInContainer(ctx.ContainerID, cmd, jobLogger); err != nil {
+			jobLogger.LogStepOutput(fmt.Sprintf("Warning: prerequisite command failed but continuing: %s", cmd))
+			// Continue anyway - some might already be installed
+		}
+	}
+
+	// Install Node.js using NodeSource repository
 	installCommands := []string{
-		"curl -fsSL https://deb.nodesource.com/setup_" + nodeVersion + ".x | bash -",
+		fmt.Sprintf("curl -fsSL https://deb.nodesource.com/setup_%s.x | bash -", nodeVersion),
 		"apt-get install -y nodejs",
-		"node --version",
-		"npm --version",
 	}
 
 	for _, cmd := range installCommands {
@@ -57,10 +69,14 @@ func (sna *SetupNodeAction) Execute(ctx *ActionContext, jobLogger *logging.JobLo
 
 	// Verify installation and get versions
 	nodeVersionOutput, err := sna.getCommandOutput(ctx.ContainerID, "node --version")
-	if err == nil {
-		result.Outputs["node-version"] = strings.TrimSpace(nodeVersionOutput)
-		jobLogger.LogStepOutput(fmt.Sprintf("Node.js installed: %s", result.Outputs["node-version"]))
+	if err != nil {
+		result.Success = false
+		result.Error = fmt.Errorf("Node.js installation verification failed: %w", err)
+		return result, err
 	}
+
+	result.Outputs["node-version"] = strings.TrimSpace(nodeVersionOutput)
+	jobLogger.LogStepOutput(fmt.Sprintf("Node.js installed: %s", result.Outputs["node-version"]))
 
 	npmVersionOutput, err := sna.getCommandOutput(ctx.ContainerID, "npm --version")
 	if err == nil {

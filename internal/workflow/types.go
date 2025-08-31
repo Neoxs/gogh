@@ -6,28 +6,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// WorkflowDefinition represents the parsed workflow YAML
-type WorkflowDefinition struct {
-	Name string                   `yaml:"name"`
-	On   map[string]interface{}   `yaml:"on"`
-	Jobs map[string]JobDefinition `yaml:"jobs"`
-}
-
+// JobNeeds is a custom type that can handle both single strings and arrays
 type JobNeeds []string
-
-// JobDefinition represents a single job in the workflow
-type JobDefinition struct {
-	RunsOn string           `yaml:"runs-on"`
-	Needs  JobNeeds         `yaml:"needs"`
-	Steps  []StepDefinition `yaml:"steps"`
-}
-
-// StepDefinition represents a single step in a job
-type StepDefinition struct {
-	Name string `yaml:"name"`
-	Run  string `yaml:"run,omitempty"`
-	Uses string `yaml:"uses,omitempty"`
-}
 
 // UnmarshalYAML implements custom YAML unmarshaling for needs field
 func (jn *JobNeeds) UnmarshalYAML(value *yaml.Node) error {
@@ -58,6 +38,29 @@ func (jn *JobNeeds) UnmarshalYAML(value *yaml.Node) error {
 // ToSlice returns the needs as a regular string slice
 func (jn JobNeeds) ToSlice() []string {
 	return []string(jn)
+}
+
+// WorkflowDefinition represents the parsed workflow YAML
+type WorkflowDefinition struct {
+	Name string                   `yaml:"name"`
+	On   map[string]interface{}   `yaml:"on"`
+	Jobs map[string]JobDefinition `yaml:"jobs"`
+}
+
+// JobDefinition represents a single job in the workflow
+type JobDefinition struct {
+	RunsOn string           `yaml:"runs-on"`
+	Needs  JobNeeds         `yaml:"needs"`
+	Steps  []StepDefinition `yaml:"steps"`
+}
+
+// StepDefinition represents a single step in a job
+type StepDefinition struct {
+	Name string                 `yaml:"name"`
+	Run  string                 `yaml:"run,omitempty"`
+	Uses string                 `yaml:"uses,omitempty"`
+	With map[string]interface{} `yaml:"with,omitempty"` // Action inputs
+	Env  map[string]string      `yaml:"env,omitempty"`  // Environment variables
 }
 
 // BuildExecutionPlan resolves job dependencies and returns execution order

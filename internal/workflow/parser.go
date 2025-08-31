@@ -8,7 +8,6 @@ import (
 )
 
 // Parser handles workflow YAML parsing
-// Parser handles workflow YAML parsing
 type Parser struct{}
 
 // NewParser creates a new workflow parser
