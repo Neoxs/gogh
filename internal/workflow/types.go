@@ -44,14 +44,16 @@ func (jn JobNeeds) ToSlice() []string {
 type WorkflowDefinition struct {
 	Name string                   `yaml:"name"`
 	On   map[string]interface{}   `yaml:"on"`
+	Env  map[string]string        `yaml:"env,omitempty"`
 	Jobs map[string]JobDefinition `yaml:"jobs"`
 }
 
 // JobDefinition represents a single job in the workflow
 type JobDefinition struct {
-	RunsOn string           `yaml:"runs-on"`
-	Needs  JobNeeds         `yaml:"needs"`
-	Steps  []StepDefinition `yaml:"steps"`
+	RunsOn string            `yaml:"runs-on"`
+	Needs  JobNeeds          `yaml:"needs"`
+	Env    map[string]string `yaml:"env,omitempty"`
+	Steps  []StepDefinition  `yaml:"steps"`
 }
 
 // StepDefinition represents a single step in a job
