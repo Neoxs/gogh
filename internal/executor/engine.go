@@ -7,6 +7,7 @@ import (
 	"github.com/Neoxs/gogh/container"
 	"github.com/Neoxs/gogh/internal/actions"
 	"github.com/Neoxs/gogh/internal/display"
+	"github.com/Neoxs/gogh/internal/environment"
 	"github.com/Neoxs/gogh/internal/logging"
 	"github.com/Neoxs/gogh/internal/workflow"
 )
@@ -19,6 +20,7 @@ type WorkflowExecutor struct {
 	display        *display.TerminalDisplay
 	workflowState  *display.WorkflowState
 	actionResolver *actions.ActionResolver
+	envManager     *environment.EnvironmentManager
 	startTime      time.Time
 }
 
@@ -39,6 +41,9 @@ func NewWorkflowExecutor(workflowDef *workflow.WorkflowDefinition, projectDir st
 	// Create action resolver
 	actionResolver := actions.NewActionResolver(projectDir)
 
+	// Create environment manager
+	envManager := environment.NewEnvironmentManager(workflowDef, projectDir)
+
 	return &WorkflowExecutor{
 		workflowDef:    workflowDef,
 		projectDir:     projectDir,
@@ -46,6 +51,7 @@ func NewWorkflowExecutor(workflowDef *workflow.WorkflowDefinition, projectDir st
 		display:        terminalDisplay,
 		workflowState:  workflowState,
 		actionResolver: actionResolver,
+		envManager:     envManager,
 		startTime:      time.Now(),
 	}, nil
 }
@@ -268,8 +274,11 @@ func (we *WorkflowExecutor) executeRunStep(step workflow.StepDefinition, jobRunn
 	// Log step start
 	jobLogger.LogStepStart(step.Name, step.Run)
 
+	// Build env
+	stepEnv := we.envManager.BuildStepEnvironment(step.Env)
+
 	// Execute step using existing container logic
-	result, err := jobRunner.RunStep(step.Name, step.Run, jobLogger)
+	result, err := jobRunner.RunStepInEnvironment(step.Name, step.Run, stepEnv, jobLogger)
 	if err != nil || !result.Success {
 		return false, err
 	}

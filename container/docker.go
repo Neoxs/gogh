@@ -88,8 +88,8 @@ func (jr *JobRunner) Start() error {
 	return nil
 }
 
-// RunStep executes a single step command inside the container with logging
-func (jr *JobRunner) RunStep(stepName, command string, jobLogger *logging.JobLogger) (*StepResult, error) {
+// RunStep executes a single step command inside the container with logging and environment
+func (jr *JobRunner) RunStep(stepName, command string, env map[string]string, jobLogger *logging.JobLogger) (*StepResult, error) {
 	if !jr.isRunning {
 		return nil, fmt.Errorf("container not running")
 	}
@@ -100,12 +100,16 @@ func (jr *JobRunner) RunStep(stepName, command string, jobLogger *logging.JobLog
 		StartTime: time.Now(),
 	}
 
-	// Use docker exec to run command in the existing container
-	args := []string{
-		"exec",
-		jr.containerID,
-		"bash", "-c", command,
+	// Build Docker exec command with environment variables
+	args := []string{"exec"}
+
+	// Add environment variables as -e flags
+	for key, value := range env {
+		args = append(args, "-e", fmt.Sprintf("%s=%s", key, value))
 	}
+
+	// Add container ID and command
+	args = append(args, jr.containerID, "bash", "-c", command)
 
 	cmd := exec.Command("docker", args...)
 
@@ -156,6 +160,46 @@ func (jr *JobRunner) RunStep(stepName, command string, jobLogger *logging.JobLog
 	}
 
 	return result, nil
+}
+
+// RunStepInEnvironment is a convenience method that runs a command with environment setup
+func (jr *JobRunner) RunStepInEnvironment(stepName, command string, env map[string]string, jobLogger *logging.JobLogger) (*StepResult, error) {
+	// Log environment variables (excluding sensitive ones)
+	jr.logEnvironmentVariables(env, jobLogger)
+
+	return jr.RunStep(stepName, command, env, jobLogger)
+}
+
+// logEnvironmentVariables logs environment setup (filtering sensitive data)
+func (jr *JobRunner) logEnvironmentVariables(env map[string]string, jobLogger *logging.JobLogger) {
+	if len(env) == 0 {
+		return
+	}
+
+	jobLogger.LogStepOutput("Environment variables:")
+	for key, value := range env {
+		// Filter out potentially sensitive variables
+		if jr.isSensitiveVar(key) {
+			jobLogger.LogStepOutput(fmt.Sprintf("  %s=***", key))
+		} else {
+			jobLogger.LogStepOutput(fmt.Sprintf("  %s=%s", key, value))
+		}
+	}
+}
+
+// isSensitiveVar checks if a variable name suggests sensitive content
+func (jr *JobRunner) isSensitiveVar(key string) bool {
+	sensitivePatterns := []string{
+		"TOKEN", "SECRET", "KEY", "PASSWORD", "PASS", "AUTH", "CREDENTIAL",
+	}
+
+	upperKey := strings.ToUpper(key)
+	for _, pattern := range sensitivePatterns {
+		if strings.Contains(upperKey, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 // streamOutputToLogger reads from pipe and writes directly to job logger
