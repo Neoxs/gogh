@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="logo.png" alt="GoGH Logo" width="200" height="200">
+</div>
+
 # GoGH 🚀
 
 **GitHub Actions Local Runner** - Test and debug your GitHub Actions workflows locally with Docker
