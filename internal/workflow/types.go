@@ -50,10 +50,11 @@ type WorkflowDefinition struct {
 
 // JobDefinition represents a single job in the workflow
 type JobDefinition struct {
-	RunsOn string            `yaml:"runs-on"`
-	Needs  JobNeeds          `yaml:"needs"`
-	Env    map[string]string `yaml:"env,omitempty"`
-	Steps  []StepDefinition  `yaml:"steps"`
+	RunsOn string                 `yaml:"runs-on"`
+	Needs  JobNeeds               `yaml:"needs"`
+	With   map[string]interface{} `yaml:"with,omitempty"` // Action inputs
+	Env    map[string]string      `yaml:"env,omitempty"`
+	Steps  []StepDefinition       `yaml:"steps"`
 }
 
 // StepDefinition represents a single step in a job

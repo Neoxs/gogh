@@ -2,12 +2,14 @@ package executor
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Neoxs/gogh/container"
 	"github.com/Neoxs/gogh/internal/actions"
 	"github.com/Neoxs/gogh/internal/display"
 	"github.com/Neoxs/gogh/internal/environment"
+	"github.com/Neoxs/gogh/internal/expressions"
 	"github.com/Neoxs/gogh/internal/logging"
 	"github.com/Neoxs/gogh/internal/workflow"
 )
@@ -116,7 +118,7 @@ func (we *WorkflowExecutor) Execute() error {
 	return nil
 }
 
-// executeJob runs a single job with integrated logging and display
+// executeJob runs a single job with integrated logging, display, and environment
 func (we *WorkflowExecutor) executeJob(jobID string) error {
 	job, exists := we.workflowDef.Jobs[jobID]
 	if !exists {
@@ -128,6 +130,9 @@ func (we *WorkflowExecutor) executeJob(jobID string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create job logger: %w", err)
 	}
+
+	// Configure environment manager for this job
+	we.envManager.SetJobEnvironment(job.Env)
 
 	// Update job status to running
 	we.workflowState.UpdateJobStatus(jobID, display.StatusRunning)
@@ -159,8 +164,17 @@ func (we *WorkflowExecutor) executeJob(jobID string) error {
 		}
 	}()
 
-	// Create GitHub context for actions
-	githubContext := we.createGitHubContext()
+	// Handle job-level with: inputs if they exist
+	if job.With != nil {
+		jobLogger.LogStepOutput("Job-level inputs:")
+		stepEnvironment := we.envManager.BuildStepEnvironment(nil) // No step-specific env
+
+		for key, value := range job.With {
+			rawValue := fmt.Sprintf("%v", value)
+			expandedValue := we.expandInputVariables(rawValue, stepEnvironment)
+			jobLogger.LogStepOutput(fmt.Sprintf("  %s: %s", key, expandedValue))
+		}
+	}
 
 	// Execute all steps in sequence
 	for i, step := range job.Steps {
@@ -175,16 +189,19 @@ func (we *WorkflowExecutor) executeJob(jobID string) error {
 
 		stepStartTime := time.Now()
 
+		// Build complete environment for this step
+		stepEnv := we.envManager.BuildStepEnvironment(step.Env)
+
 		var stepError error
 		var stepSuccess bool
 
-		// Determine if this is an action or run step
+		// Determine step type and execute with environment
 		if step.Uses != "" {
 			// Handle action step
-			stepSuccess, stepError = we.executeActionStep(step, jobRunner, githubContext, jobLogger)
+			stepSuccess, stepError = we.executeActionStep(step, jobRunner, stepEnv, jobLogger)
 		} else if step.Run != "" {
-			// Handle run step
-			stepSuccess, stepError = we.executeRunStep(step, jobRunner, jobLogger)
+			// Handle run step with full environment integration
+			stepSuccess, stepError = we.executeRunStep(step, jobRunner, stepEnv, jobLogger)
 		} else {
 			stepError = fmt.Errorf("step has neither 'uses' nor 'run' specified")
 			stepSuccess = false
@@ -221,28 +238,55 @@ func (we *WorkflowExecutor) executeJob(jobID string) error {
 }
 
 // executeActionStep handles uses: steps through the action system
-func (we *WorkflowExecutor) executeActionStep(step workflow.StepDefinition, jobRunner *container.JobRunner, githubContext actions.GitHubContext, jobLogger *logging.JobLogger) (bool, error) {
-	// Convert step inputs to string map
+func (we *WorkflowExecutor) executeActionStep(step workflow.StepDefinition, jobRunner *container.JobRunner, stepEnv map[string]string, jobLogger *logging.JobLogger) (bool, error) {
+	// Build step environment first (needed for input expansion)
+	stepEnvironment := we.envManager.BuildStepEnvironment(step.Env)
+
+	// Convert step inputs to string map WITH environment variable expansion
 	inputs := make(map[string]string)
 	if step.With != nil {
 		for key, value := range step.With {
-			inputs[key] = fmt.Sprintf("%v", value)
+			rawValue := fmt.Sprintf("%v", value)
+			// Expand environment variables in the input value using expression evaluator
+			expandedValue := we.expandInputVariables(rawValue, stepEnvironment)
+			inputs[key] = expandedValue
 		}
 	}
 
-	// Create action context
+	// Create GitHub context from environment manager
+	githubCtx := we.envManager.GetGitHubContext()
+
+	// Create action context with proper GitHub context
 	actionContext := &actions.ActionContext{
 		ActionRef:    step.Uses,
 		Inputs:       inputs,
 		WorkspaceDir: "/workspace",
 		ContainerID:  jobRunner.GetContainerID(),
-		GitHub:       githubContext,
+		GitHub: actions.GitHubContext{
+			Repository: githubCtx.Repository,
+			SHA:        githubCtx.SHA,
+			Ref:        githubCtx.Ref,
+			Workspace:  githubCtx.Workspace,
+			EventName:  githubCtx.EventName,
+			Actor:      githubCtx.Actor,
+			RunID:      githubCtx.RunID,
+			RunNumber:  githubCtx.RunNumber,
+			Job:        "", // Actions don't need job context
+			Action:     step.Uses,
+			ActionPath: "",
+		},
 		Runner: actions.RunnerContext{
 			OS:   "linux",
 			Arch: "x64",
 			Temp: "/tmp",
 			Tool: "/opt/hostedtoolcache",
 		},
+	}
+
+	// Log the expanded inputs for debugging
+	jobLogger.LogStepOutput("Action inputs:")
+	for key, value := range inputs {
+		jobLogger.LogStepOutput(fmt.Sprintf("  %s: %s", key, value))
 	}
 
 	// Resolve and execute action
@@ -255,7 +299,7 @@ func (we *WorkflowExecutor) executeActionStep(step workflow.StepDefinition, jobR
 	// Log action start
 	jobLogger.LogStepStart(step.Name, fmt.Sprintf("uses: %s", step.Uses))
 
-	// Execute action
+	// Execute action (actions handle their own environment setup internally)
 	result, err := actionExecutor.Execute(actionContext, jobLogger)
 	if err != nil {
 		return false, err
@@ -265,20 +309,16 @@ func (we *WorkflowExecutor) executeActionStep(step workflow.StepDefinition, jobR
 		return false, result.Error
 	}
 
-	// TODO: Handle action outputs for future step dependencies
 	return true, nil
 }
 
-// executeRunStep handles run: steps through the container system
-func (we *WorkflowExecutor) executeRunStep(step workflow.StepDefinition, jobRunner *container.JobRunner, jobLogger *logging.JobLogger) (bool, error) {
+// executeRunStep handles run: steps with full environment variable support
+func (we *WorkflowExecutor) executeRunStep(step workflow.StepDefinition, jobRunner *container.JobRunner, stepEnv map[string]string, jobLogger *logging.JobLogger) (bool, error) {
 	// Log step start
 	jobLogger.LogStepStart(step.Name, step.Run)
 
-	// Build env
-	stepEnv := we.envManager.BuildStepEnvironment(step.Env)
-
-	// Execute step using existing container logic
-	result, err := jobRunner.RunStepInEnvironment(step.Name, step.Run, stepEnv, jobLogger)
+	// This is the key integration: pass the complete environment to the container
+	result, err := jobRunner.RunStep(step.Name, step.Run, stepEnv, jobLogger)
 	if err != nil || !result.Success {
 		return false, err
 	}
@@ -286,37 +326,67 @@ func (we *WorkflowExecutor) executeRunStep(step workflow.StepDefinition, jobRunn
 	return true, nil
 }
 
-// createGitHubContext simulates GitHub's runtime context
-func (we *WorkflowExecutor) createGitHubContext() actions.GitHubContext {
-	// Try to get git information
-	repository := we.getGitRepository()
-	sha := we.getGitSHA()
-	ref := we.getGitRef()
-
-	return actions.GitHubContext{
-		Repository: repository,
-		SHA:        sha,
-		Ref:        ref,
-		Workspace:  "/workspace",
-		EventName:  "push", // Default to push event
+// expandInputVariables expands environment variables in action input values using expression evaluator
+func (we *WorkflowExecutor) expandInputVariables(value string, environment map[string]string) string {
+	// Create evaluation context
+	githubCtx := we.envManager.GetGitHubContext()
+	evalContext := &expressions.EvaluationContext{
+		Github: expressions.GitHubContext{
+			Repository: githubCtx.Repository,
+			SHA:        githubCtx.SHA,
+			Ref:        githubCtx.Ref,
+			EventName:  githubCtx.EventName,
+			Actor:      githubCtx.Actor,
+			RunID:      githubCtx.RunID,
+			RunNumber:  githubCtx.RunNumber,
+			Workspace:  githubCtx.Workspace,
+		},
+		Env: environment,
+		Job: expressions.JobContext{
+			Status: "in_progress", // Could be made dynamic
+		},
+		Runner: expressions.RunnerContext{
+			OS:   "Linux",
+			Arch: "X64",
+		},
+		Secrets: make(map[string]string), // TODO: Add secrets support
 	}
+
+	// Create evaluator
+	evaluator := expressions.NewExpressionEvaluator(evalContext)
+
+	// Find and replace all ${{ ... }} expressions
+	return we.replaceExpressions(value, evaluator)
 }
 
-// Helper methods to simulate GitHub context
-func (we *WorkflowExecutor) getGitRepository() string {
-	// Try to get from git remote
-	// For now, return a default - you could enhance this to actually parse git config
-	return "user/repo"
-}
+// replaceExpressions finds and replaces all expressions in the input string
+func (we *WorkflowExecutor) replaceExpressions(input string, evaluator *expressions.ExpressionEvaluator) string {
+	result := input
 
-func (we *WorkflowExecutor) getGitSHA() string {
-	// Try to get current commit SHA
-	// For now, return a placeholder - you could enhance this to run `git rev-parse HEAD`
-	return "1234567890abcdef"
-}
+	// Simple approach: find ${{ ... }} patterns and evaluate them
+	// This handles multiple expressions in one string like "The ${{ github.event_name }} event triggered this step."
+	for {
+		start := strings.Index(result, "${{")
+		if start == -1 {
+			break
+		}
 
-func (we *WorkflowExecutor) getGitRef() string {
-	// Try to get current branch/tag
-	// For now, return a default - you could enhance this to run `git branch --show-current`
-	return "refs/heads/main"
+		end := strings.Index(result[start:], "}}")
+		if end == -1 {
+			break
+		}
+		end = start + end + 2
+
+		expression := result[start:end]
+		evaluated, err := evaluator.Evaluate(expression)
+		if err != nil {
+			// Log error but continue with original expression
+			// In production, you might want better error handling
+			break
+		}
+
+		result = result[:start] + evaluated + result[end:]
+	}
+
+	return result
 }

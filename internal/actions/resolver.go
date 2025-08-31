@@ -43,6 +43,12 @@ type GitHubContext struct {
 	Ref        string // branch/tag reference
 	Workspace  string // workspace path
 	EventName  string // push, pull_request, etc.
+	Actor      string
+	RunID      string
+	RunNumber  string
+	Job        string
+	Action     string
+	ActionPath string
 	// TODO: Include teh rest of github ctx vars
 }
 
